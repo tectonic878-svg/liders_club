@@ -1,0 +1,6 @@
+{
+  "name": "UBS Leaders Club - Saralov Platformasi",
+  "description": "UBS Liderlar Klubi a'zoligi uchun talabalar arizalarini qabul qilish, mutolaa monitoringi va saralov tizimi.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
