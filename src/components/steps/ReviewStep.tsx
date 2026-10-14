@@ -24,10 +24,9 @@ export const ReviewStep: React.FC<ReviewStepProps> = ({
     window.print();
   };
 
-  const handleFinalSubmit = () => {
+  const handleFinalSubmit = async () => {
     setIsSubmitting(true);
-    setTimeout(() => {
-      // Fire confetti celebration
+    try {
       try {
         confetti({
           particleCount: 90,
@@ -39,10 +38,11 @@ export const ReviewStep: React.FC<ReviewStepProps> = ({
         console.log('Confetti triggered', e);
       }
 
-      onSubmitApplication();
+      await onSubmitApplication();
+    } finally {
       setIsSubmitting(false);
       setIsConfirmModalOpen(false);
-    }, 600);
+    }
   };
 
   return (

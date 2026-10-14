@@ -52,25 +52,33 @@ export default function App() {
 
   // Load or sync application on auth change
   useEffect(() => {
+    let isCancelled = false;
+
     if (auth?.isAuthenticated && auth.phoneNumber) {
-      const existing = storageService.getApplicationByPhone(auth.phoneNumber);
-      if (existing) {
-        setApplication(existing);
-      } else {
-        const newApp: StudentApplication = {
-          ...DEFAULT_BLANK_APP,
-          id: generateApplicationId(),
-          fullName: auth.fullName,
-          phoneNumber: auth.phoneNumber,
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-        };
-        storageService.saveOrUpdateApplication(newApp);
-        setApplication(newApp);
-      }
+      storageService.getApplicationByPhone(auth.phoneNumber).then((existing) => {
+        if (isCancelled) return;
+        if (existing) {
+          setApplication(existing);
+        } else {
+          const newApp: StudentApplication = {
+            ...DEFAULT_BLANK_APP,
+            id: generateApplicationId(),
+            fullName: auth.fullName,
+            phoneNumber: auth.phoneNumber,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          };
+          storageService.saveOrUpdateApplication(newApp);
+          setApplication(newApp);
+        }
+      });
     } else {
       setApplication(null);
     }
+
+    return () => {
+      isCancelled = true;
+    };
   }, [auth]);
 
   // Compute completed steps
@@ -153,7 +161,7 @@ export default function App() {
     setCurrentStep(1);
   };
 
-  const handleSubmitFinal = () => {
+  const handleSubmitFinal = async () => {
     if (!application) return;
     const submitted: StudentApplication = {
       ...application,
@@ -162,7 +170,7 @@ export default function App() {
       updatedAt: new Date().toISOString(),
     };
     setApplication(submitted);
-    storageService.saveOrUpdateApplication(submitted);
+    await storageService.saveOrUpdateApplication(submitted);
   };
 
   const isAlreadySubmitted =

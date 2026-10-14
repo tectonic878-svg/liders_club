@@ -1,7 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   Users, Search, Download, FileText, Archive,
-  X, Eye, Sparkles, RefreshCw, CheckCircle2, Clock
+  X, Eye, RefreshCw, Database, Check, Copy, AlertCircle, CheckCircle2
 } from 'lucide-react';
 import { StudentApplication, ApplicationStatus } from '../../types';
 import { storageService } from '../../services/storageService';
@@ -11,6 +11,11 @@ import {
   generateAllApplicantsMasterZip, 
   downloadBlob 
 } from '../../utils/exportUtils';
+import { 
+  getSupabaseCredentials, 
+  saveCustomSupabaseCredentials, 
+  isSupabaseConfigured 
+} from '../../lib/supabase';
 
 interface AdminDashboardProps {
   onClose: () => void;
@@ -30,8 +35,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   onClose,
 }) => {
   const [applications, setApplications] = useState<StudentApplication[]>(() =>
-    storageService.getApplications()
+    storageService.getLocalApplications()
   );
+  const [isLoading, setIsLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [courseFilter, setCourseFilter] = useState<string>('all');
@@ -43,10 +49,35 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [isZipping, setIsZipping] = useState(false);
   const [previewCert, setPreviewCert] = useState<any | null>(null);
 
-  const refreshData = () => {
-    const list = storageService.getApplications();
-    setApplications([...list]);
+  // Supabase Settings Modal State
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [supabaseUrlInput, setSupabaseUrlInput] = useState('');
+  const [supabaseKeyInput, setSupabaseKeyInput] = useState('');
+  const [connectionStatus, setConnectionStatus] = useState<{
+    tested: boolean;
+    connected: boolean;
+    message: string;
+  } | null>(null);
+  const [copiedSql, setCopiedSql] = useState(false);
+
+  const fetchRemoteApplications = async () => {
+    setIsLoading(true);
+    try {
+      const list = await storageService.getApplications();
+      setApplications(list);
+    } catch (err) {
+      console.error('Fetch error:', err);
+    } finally {
+      setIsLoading(false);
+    }
   };
+
+  useEffect(() => {
+    fetchRemoteApplications();
+    const creds = getSupabaseCredentials();
+    setSupabaseUrlInput(creds.url);
+    setSupabaseKeyInput(creds.key);
+  }, []);
 
   const handleOpenDetail = (app: StudentApplication) => {
     setSelectedApp(app);
@@ -55,7 +86,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setPreviewCert(null);
   };
 
-  const handleSaveStatus = () => {
+  const handleSaveStatus = async () => {
     if (!selectedApp) return;
 
     const updatedApp: StudentApplication = {
@@ -65,9 +96,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       reviewerName: 'Admin',
     };
 
-    storageService.saveOrUpdateApplication(updatedApp);
+    await storageService.saveOrUpdateApplication(updatedApp);
     setSelectedApp(updatedApp);
-    refreshData();
+    fetchRemoteApplications();
   };
 
   // Export applicant Word document (.doc)
@@ -110,16 +141,79 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const handleResetData = () => {
     if (confirm('Barcha arizalarni dastlabki namunaviy holatga qaytarishni xohlaysizmi?')) {
       storageService.resetToDefault();
-      refreshData();
+      fetchRemoteApplications();
       setSelectedApp(null);
     }
   };
 
-  // Metrics (Clean & direct, without score or average reading stats)
+  const handleSaveSupabaseConfig = async (e: React.FormEvent) => {
+    e.preventDefault();
+    saveCustomSupabaseCredentials(supabaseUrlInput, supabaseKeyInput);
+    const res = await storageService.testSupabaseConnection();
+    setConnectionStatus({
+      tested: true,
+      connected: res.connected,
+      message: res.message,
+    });
+    if (res.connected) {
+      fetchRemoteApplications();
+    }
+  };
+
+  const handleTestConnection = async () => {
+    setConnectionStatus(null);
+    const res = await storageService.testSupabaseConnection();
+    setConnectionStatus({
+      tested: true,
+      connected: res.connected,
+      message: res.message,
+    });
+  };
+
+  const handleCopySql = () => {
+    const sql = `-- UBS Leaders Club SQL Schema
+CREATE TABLE IF NOT EXISTS public.applications (
+  id TEXT PRIMARY KEY,
+  full_name TEXT NOT NULL,
+  phone_number TEXT NOT NULL,
+  email TEXT,
+  faculty TEXT,
+  direction TEXT NOT NULL,
+  course TEXT NOT NULL,
+  study_type TEXT DEFAULT 'Kunduzgi',
+  group_number TEXT,
+  gpa TEXT,
+  leadership_answers JSONB NOT NULL DEFAULT '{}'::jsonb,
+  total_books_read INTEGER DEFAULT 0,
+  recent_books JSONB DEFAULT '[]'::jsonb,
+  achievements JSONB DEFAULT '[]'::jsonb,
+  status TEXT DEFAULT 'yuborildi',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  submitted_at TIMESTAMPTZ,
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  committee_notes TEXT,
+  committee_score INTEGER,
+  reviewer_name TEXT
+);
+
+ALTER TABLE public.applications ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Allow anonymous insert applications" ON public.applications FOR INSERT TO anon, authenticated WITH CHECK (true);
+CREATE POLICY "Allow read applications" ON public.applications FOR SELECT TO anon, authenticated USING (true);
+CREATE POLICY "Allow update applications" ON public.applications FOR UPDATE TO anon, authenticated USING (true) WITH CHECK (true);
+`;
+    navigator.clipboard.writeText(sql);
+    setCopiedSql(true);
+    setTimeout(() => setCopiedSql(false), 2500);
+  };
+
+  // Metrics
   const totalApps = applications.length;
   const newAppsCount = applications.filter((a) => a.status === 'yuborildi').length;
   const inReviewCount = applications.filter((a) => a.status === 'korib_chiqilmoqda' || a.status === 'intervyuga_chaqirildi').length;
   const acceptedCount = applications.filter((a) => a.status === 'qabul_qilindi').length;
+
+  const isConnected = isSupabaseConfigured();
 
   // Filtered list
   const filteredApps = applications.filter((app) => {
@@ -140,10 +234,28 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       <div className="rounded-2xl border border-slate-800 bg-gradient-to-r from-slate-900 via-slate-900/90 to-slate-950 p-6 sm:p-7">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div>
-            <div className="inline-flex items-center gap-1.5 rounded-full border border-amber-500/30 bg-amber-500/10 px-2.5 py-0.5 text-xs font-medium text-amber-400 mb-2">
-              <Users className="h-3.5 w-3.5" />
-              <span>UBS Leaders Club · Maxfiy Komissiya Boshqaruvi</span>
+            <div className="flex items-center gap-2 mb-2">
+              <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-500/30 bg-amber-500/10 px-2.5 py-0.5 text-xs font-medium text-amber-400">
+                <Users className="h-3.5 w-3.5" />
+                <span>UBS Leaders Club · Maxfiy Komissiya Boshqaruvi</span>
+              </span>
+
+              {/* Live Supabase Connection Badge */}
+              <button
+                type="button"
+                onClick={() => setIsSettingsOpen(true)}
+                className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11px] font-semibold transition-colors ${
+                  isConnected
+                    ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20'
+                    : 'border-amber-500/40 bg-amber-500/10 text-amber-400 hover:bg-amber-500/20'
+                }`}
+              >
+                <Database className="h-3 w-3" />
+                <span>{isConnected ? 'Supabase Ulangan' : 'Supabase Sozlash'}</span>
+                <span className={`h-1.5 w-1.5 rounded-full ${isConnected ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`} />
+              </button>
             </div>
+
             <h2 className="text-xl sm:text-2xl font-bold text-white">
               Nomzodlar Ro'yxati va Hujjatlar Markazi
             </h2>
@@ -155,21 +267,32 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
+              disabled={isLoading}
+              onClick={fetchRemoteApplications}
+              className="inline-flex items-center gap-1.5 rounded-xl border border-slate-700 bg-slate-800 py-2.5 px-3.5 text-xs font-semibold text-slate-200 hover:bg-slate-700 transition-colors"
+              title="Arizalarni yangilash"
+            >
+              <RefreshCw className={`h-3.5 w-3.5 ${isLoading ? 'animate-spin text-amber-400' : ''}`} />
+              <span>{isLoading ? 'Yangilanmoqda...' : 'Yangilash'}</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setIsSettingsOpen(true)}
+              className="inline-flex items-center gap-1.5 rounded-xl border border-emerald-500/40 bg-emerald-500/10 py-2.5 px-3.5 text-xs font-semibold text-emerald-300 hover:bg-emerald-500/20 transition-colors"
+            >
+              <Database className="h-3.5 w-3.5" />
+              <span>Supabase Sozlamalari</span>
+            </button>
+
+            <button
+              type="button"
               disabled={isZipping}
               onClick={handleDownloadAllZip}
               className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 py-2.5 px-4 text-xs font-bold text-slate-950 hover:from-amber-400 hover:to-amber-500 shadow-md shadow-amber-500/20 transition-all active:scale-95 disabled:opacity-50"
             >
               <Archive className="h-4 w-4" />
               <span>{isZipping ? 'Yuklanmoqda...' : 'Barchasini .ZIP yuklab olish'}</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={handleResetData}
-              title="Namunaviy arizalarni qayta tiklash"
-              className="rounded-xl border border-slate-800 bg-slate-950 p-2.5 text-slate-400 hover:text-white transition-colors"
-            >
-              <RefreshCw className="h-4 w-4" />
             </button>
 
             <button
@@ -183,7 +306,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         </div>
       </div>
 
-      {/* Overview Metrics Cards (Clean counts only) */}
+      {/* Overview Metrics Cards */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
         <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-4">
           <span className="text-xs font-medium text-slate-400">Jami Nomzodlar</span>
@@ -356,6 +479,133 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           </table>
         </div>
       </div>
+
+      {/* Supabase Settings Modal */}
+      {isSettingsOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-5 bg-black/85 backdrop-blur-md animate-fadeIn">
+          <div className="relative max-w-2xl w-full rounded-2xl border border-slate-800 bg-slate-900 p-6 shadow-2xl space-y-5 max-h-[92vh] overflow-y-auto text-xs">
+            <div className="flex items-start justify-between border-b border-slate-800 pb-3">
+              <div>
+                <span className="text-[10px] uppercase font-mono tracking-widest text-emerald-400 font-bold">
+                  BULUTLI MA'LUMOTLAR BAZASI
+                </span>
+                <h3 className="text-lg font-bold text-white mt-0.5 flex items-center gap-2">
+                  <Database className="h-5 w-5 text-emerald-400" />
+                  <span>Supabase Integratsiyasi & Sozlamalari</span>
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsSettingsOpen(false)}
+                className="rounded-lg p-1.5 text-slate-400 hover:text-white hover:bg-slate-800"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            {/* Status box */}
+            {connectionStatus && (
+              <div className={`rounded-xl border p-3 flex items-start gap-2.5 ${
+                connectionStatus.connected
+                  ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300'
+                  : 'border-red-500/40 bg-red-500/10 text-red-300'
+              }`}>
+                {connectionStatus.connected ? (
+                  <CheckCircle2 className="h-4 w-4 shrink-0 mt-0.5 text-emerald-400" />
+                ) : (
+                  <AlertCircle className="h-4 w-4 shrink-0 mt-0.5 text-red-400" />
+                )}
+                <div>
+                  <span className="font-bold block">
+                    {connectionStatus.connected ? "Ulanish Muvaffaqiyatli!" : "Ulanish Xatosi:"}
+                  </span>
+                  <p className="mt-0.5 text-[11px] leading-relaxed">{connectionStatus.message}</p>
+                </div>
+              </div>
+            )}
+
+            {/* Instruction steps */}
+            <div className="rounded-xl border border-slate-800 bg-slate-950 p-4 space-y-3">
+              <h4 className="font-bold text-white text-sm">3 ta oddiy qadam bilan ulash:</h4>
+              
+              <ol className="space-y-2 list-decimal list-inside text-slate-300 leading-relaxed">
+                <li>
+                  <strong>supabase.com</strong> saytidan bepul loyiha oching.
+                </li>
+                <li>
+                  Supabase Dashboard &gt; <strong>SQL Editor</strong> ga kiring va quyidagi SQL kodini nusxalab ishga tushiring ("Run"):
+                  <div className="mt-2 flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={handleCopySql}
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-500/20 px-3 py-1.5 text-xs font-semibold text-emerald-300 hover:bg-emerald-500/30"
+                    >
+                      {copiedSql ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+                      <span>{copiedSql ? "SQL nusxalandi!" : "SQL kodini nusxalash"}</span>
+                    </button>
+                    <span className="text-[11px] text-slate-500">(`supabase-schema.sql` faylida ham mavjud)</span>
+                  </div>
+                </li>
+                <li>
+                  Project Settings &gt; <strong>API</strong> bo'limidan <strong>Project URL</strong> va <strong>anon public key</strong> ni oling.
+                </li>
+              </ol>
+            </div>
+
+            {/* Form */}
+            <form onSubmit={handleSaveSupabaseConfig} className="space-y-3">
+              <div>
+                <label className="block text-slate-300 font-semibold mb-1">
+                  Supabase Project URL:
+                </label>
+                <input
+                  type="url"
+                  required
+                  value={supabaseUrlInput}
+                  onChange={(e) => setSupabaseUrlInput(e.target.value)}
+                  placeholder="https://xyzcompany.supabase.co"
+                  className="w-full rounded-xl border border-slate-700 bg-slate-950 py-2 px-3 text-xs text-white font-mono focus:border-emerald-500 focus:outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block text-slate-300 font-semibold mb-1">
+                  Supabase Anon Public Key:
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={supabaseKeyInput}
+                  onChange={(e) => setSupabaseKeyInput(e.target.value)}
+                  placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+                  className="w-full rounded-xl border border-slate-700 bg-slate-950 py-2 px-3 text-xs text-white font-mono focus:border-emerald-500 focus:outline-none"
+                />
+              </div>
+
+              <div className="rounded-lg bg-blue-500/10 border border-blue-500/20 p-2.5 text-[11px] text-blue-300">
+                <strong>Netlify Deploy uchun:</strong> Netlify boshqaruv panelida <code>Site configuration &gt; Environment variables</code> bo'limiga <code>VITE_SUPABASE_URL</code> va <code>VITE_SUPABASE_ANON_KEY</code> nomlari bilan ham qo'shib qo'ying.
+              </div>
+
+              <div className="flex items-center justify-between pt-2">
+                <button
+                  type="button"
+                  onClick={handleTestConnection}
+                  className="rounded-xl border border-slate-700 bg-slate-800 py-2 px-3.5 font-semibold text-slate-200 hover:bg-slate-700"
+                >
+                  Ulanishni tekshirish
+                </button>
+
+                <button
+                  type="submit"
+                  className="rounded-xl bg-emerald-500 py-2 px-5 font-bold text-slate-950 hover:bg-emerald-400 active:scale-95 shadow-md shadow-emerald-500/20"
+                >
+                  Saqlash va Ulanish
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* Applicant Detailed Inspector Modal */}
       {selectedApp && (
